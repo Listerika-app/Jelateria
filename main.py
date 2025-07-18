@@ -5,8 +5,8 @@ import requests
 import time
 from aiogram import Bot, Dispatcher, types, executor
 from openai import OpenAI
+from aiogram.types import ChatActions
 
-# Настройки
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
@@ -16,10 +16,10 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# Храним описания пользователей
 user_descriptions = {}
+user_images = {}
+user_actions = {}  # сохраняем выбранное действие
 
-# Генерируем описание игрушки
 async def describe_toy(photo_bytes):
     b64 = base64.b64encode(photo_bytes).decode("utf-8")
     image_data = f"data:image/jpeg;base64,{b64}"
@@ -42,7 +42,6 @@ async def describe_toy(photo_bytes):
     logging.info(f"[Описание игрушки]: {description}")
     return description
 
-# Обработка фото
 @dp.message_handler(content_types=types.ContentType.PHOTO)
 async def handle_photo(message: types.Message):
     user_id = message.from_user.id
@@ -52,6 +51,9 @@ async def handle_photo(message: types.Message):
 
     description = await describe_toy(photo_bytes)
     user_descriptions[user_id] = description
+
+    image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+    user_images[user_id] = image_url
 
     await message.reply(description)
 
@@ -66,34 +68,42 @@ async def handle_photo(message: types.Message):
         return
 
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(*[types.InlineKeyboardButton(text=b, callback_data=b) for b in buttons])
+    kb.add(*[types.InlineKeyboardButton(text=b, callback_data=f"action:{b}") for b in buttons])
     await message.reply(text, reply_markup=kb)
 
-# Обработка кнопок и видео Runway
-@dp.callback_query_handler()
-async def process_callback(callback_query: types.CallbackQuery):
-    action = callback_query.data
+@dp.callback_query_handler(lambda c: c.data.startswith("action:"))
+async def handle_action(callback_query: types.CallbackQuery):
+    action = callback_query.data.split(":")[1]
+    user_id = callback_query.from_user.id
+    user_actions[user_id] = action
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton(text="🎬 Мультфильм", callback_data="style:3d"),
+        types.InlineKeyboardButton(text="📚 Комикс", callback_data="style:2d")
+    )
+    await bot.send_message(user_id, "Выбери стиль видео:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("style:"))
+async def generate_video(callback_query: types.CallbackQuery):
+    style_choice = callback_query.data.split(":")[1]
     user_id = callback_query.from_user.id
 
-    await bot.send_message(user_id, f"🎬 Оживляем: {action}...")
-
+    action = user_actions.get(user_id, "танцует")
     description = user_descriptions.get(user_id, "мягкая игрушка")
-    character = description.replace("Это", "").replace("мягкая игрушка", "").strip(".").strip() or "мягкая игрушка"
-    style = "в 3D стиле, как в мультфильмах Disney, яркий фон"
+    image_url = user_images.get(user_id)
 
-    if action == "Танец":
-        prompt = f"{character} танцует, {style}"
-    elif action == "Поцелуйчики":
-        prompt = f"{character} посылает воздушный поцелуй, улыбается, {style}"
-    elif action == "Привет":
-        prompt = f"{character} машет рукой и улыбается, {style}"
-    elif action == "Едем":
-        prompt = f"{character} едет по игрушечному городу, {style}"
-    elif action == "Дрифт":
-        prompt = f"{character} дрифтит с дымом из-под колёс, {style}"
+    character = description.replace("Это", "").replace("мягкая игрушка", "").strip(".").strip() or "мягкая игрушка"
+
+    if style_choice == "3d":
+        style = "в 3D стиле, как в мультфильмах Disney, яркий фон"
     else:
-        await bot.send_message(user_id, "Пока не умею оживлять это действие 🙈")
-        return
+        style = "в 2D стиле, как в мультфильмах Disney, яркий фон"
+
+    prompt = f"Та же игрушка {action.lower()}, {style}"
+
+    await bot.send_chat_action(user_id, ChatActions.UPLOAD_VIDEO)
+    await bot.send_message(user_id, f"🎬 Генерируем видео в стиле: {action} + {style.split(',')[0]}...")
 
     try:
         headers = {
@@ -103,6 +113,7 @@ async def process_callback(callback_query: types.CallbackQuery):
 
         data = {
             "input": {
+                "image": image_url,
                 "prompt": prompt,
                 "num_frames": 80,
                 "seed": 42
@@ -110,7 +121,7 @@ async def process_callback(callback_query: types.CallbackQuery):
         }
 
         response = requests.post(
-            "https://api.runwayml.com/v1/generate/video/text-to-video",
+            "https://api.runwayml.com/v1/generate/video/image-to-video",
             headers=headers,
             json=data
         )
@@ -118,7 +129,10 @@ async def process_callback(callback_query: types.CallbackQuery):
         generation_id = response.json()["id"]
         video_url = None
 
-        for _ in range(30):
+        wait_message = await bot.send_message(user_id, "⏳ Генерируем видео")
+        progress = ["⏳ Генерируем видео.", "⏳ Генерируем видео..", "⏳ Генерируем видео..."]
+
+        for i in range(30):
             check = requests.get(
                 f"https://api.runwayml.com/v1/generate/video/{generation_id}",
                 headers=headers
@@ -127,9 +141,14 @@ async def process_callback(callback_query: types.CallbackQuery):
             if status.get("status") == "succeeded":
                 video_url = status["video_url"]
                 break
+            dots = progress[i % 3]
+            await bot.edit_message_text(chat_id=user_id, message_id=wait_message.message_id, text=dots)
             time.sleep(5)
 
+        await bot.delete_message(chat_id=user_id, message_id=wait_message.message_id)
+
         if video_url:
+            await bot.send_message(user_id, "🎉 Видео готово!")
             await bot.send_video(user_id, video_url)
         else:
             await bot.send_message(user_id, "⏳ Видео не удалось получить вовремя. Попробуй ещё раз.")
