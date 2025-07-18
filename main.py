@@ -108,7 +108,9 @@ async def generate_video(callback_query: types.CallbackQuery):
     try:
         headers = {
             "Authorization": f"Bearer {RUNWAY_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Runway-Version": "2024-01-01"
         }
 
         data = {
