@@ -18,7 +18,7 @@ dp = Dispatcher(bot)
 
 user_descriptions = {}
 user_images = {}
-user_actions = {}  # сохраняем выбранное действие
+user_actions = {}  # сохраняем выбранное действие и стиль
 
 async def describe_toy(photo_bytes):
     b64 = base64.b64encode(photo_bytes).decode("utf-8")
@@ -75,7 +75,8 @@ async def handle_photo(message: types.Message):
 async def handle_action(callback_query: types.CallbackQuery):
     action = callback_query.data.split(":")[1]
     user_id = callback_query.from_user.id
-    user_actions[user_id] = action
+
+    user_actions[user_id] = {"action": action}
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -85,38 +86,52 @@ async def handle_action(callback_query: types.CallbackQuery):
     await bot.send_message(user_id, "Выбери стиль видео:", reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("style:"))
-async def generate_video(callback_query: types.CallbackQuery):
+async def select_model(callback_query: types.CallbackQuery):
     style_choice = callback_query.data.split(":")[1]
     user_id = callback_query.from_user.id
 
-    action = user_actions.get(user_id, "танцует")
+    user_actions.setdefault(user_id, {})
+    user_actions[user_id]["style"] = style_choice
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton(text="🚀 Gen-4 Turbo", callback_data="model:gen-4-turbo"),
+        types.InlineKeyboardButton(text="⚡ Gen-3 Alpha Turbo", callback_data="model:gen-3-alpha-turbo")
+    )
+    await bot.send_message(user_id, "Выбери модель генерации видео:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("model:"))
+async def generate_video(callback_query: types.CallbackQuery):
+    model_choice = callback_query.data.split(":")[1]
+    user_id = callback_query.from_user.id
+
+    user_data = user_actions.get(user_id, {})
+    style_choice = user_data.get("style", "3d")
+    action = user_data.get("action", "танцует")
     description = user_descriptions.get(user_id, "мягкая игрушка")
     image_url = user_images.get(user_id)
 
     character = description.replace("Это", "").replace("мягкая игрушка", "").strip(".").strip() or "мягкая игрушка"
-
-    if style_choice == "3d":
-        style = "в 3D стиле, как в мультфильмах Disney, яркий фон"
-    else:
-        style = "в 2D стиле, как в мультфильмах Disney, яркий фон"
-
+    style = "в 3D стиле, как в мультфильмах Disney, яркий фон" if style_choice == "3d" else "в 2D стиле, как в мультфильмах Disney, яркий фон"
     prompt = f"Та же игрушка {action.lower()}, {style}"
 
     await bot.send_chat_action(user_id, ChatActions.UPLOAD_VIDEO)
-    await bot.send_message(user_id, f"🎬 Генерируем видео в стиле: {action} + {style.split(',')[0]}...")
+    await bot.send_message(user_id, f"🎬 Генерируем видео: {action} + {style.split(',')[0]} на модели {model_choice}...")
 
     try:
+        image_bytes = requests.get(image_url).content
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        image_data_url = f"data:image/jpeg;base64,{image_base64}"
+
         headers = {
             "Authorization": f"Bearer {RUNWAY_API_KEY}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Runway-Version": "2024-05-01"
+            "Content-Type": "application/json"
         }
 
         data = {
-            "model": "gen-4-turbo",
+            "model": model_choice,
             "input": {
-                "image_url": image_url,
+                "image": image_data_url,
                 "prompt": prompt,
                 "motion": "default",
                 "num_frames": 80,
@@ -124,12 +139,7 @@ async def generate_video(callback_query: types.CallbackQuery):
             }
         }
 
-        response = requests.post(
-            "https://api.runwayml.com/v2/generations",
-            headers=headers,
-            json=data
-        )
-
+        response = requests.post("https://api.runwayml.com/v2/generations", headers=headers, json=data)
         if response.status_code != 200 or "id" not in response.json():
             logging.error(f"Ошибка запроса Runway: {response.text}")
             await bot.send_message(user_id, "❌ Runway не принял запрос. Попробуй позже.")
@@ -137,15 +147,11 @@ async def generate_video(callback_query: types.CallbackQuery):
 
         generation_id = response.json()["id"]
         video_url = None
-
         wait_message = await bot.send_message(user_id, "⏳ Генерируем видео")
         progress = ["⏳ Генерируем видео.", "⏳ Генерируем видео..", "⏳ Генерируем видео..."]
 
         for i in range(30):
-            check = requests.get(
-                f"https://api.runwayml.com/v2/generations/{generation_id}",
-                headers=headers
-            )
+            check = requests.get(f"https://api.runwayml.com/v2/generations/{generation_id}", headers=headers)
             status = check.json()
             if status.get("status") == "succeeded":
                 video_url = status.get("output", {}).get("video")
