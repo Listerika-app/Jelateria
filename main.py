@@ -129,7 +129,6 @@ async def generate_video(callback_query: types.CallbackQuery):
         }
 
         data = {
-            "model": model_choice,
             "input": {
                 "image": image_data_url,
                 "prompt": prompt,
@@ -139,19 +138,19 @@ async def generate_video(callback_query: types.CallbackQuery):
             }
         }
 
-        response = requests.post("https://api.runwayml.com/v2/generations", headers=headers, json=data)
-        if response.status_code != 200 or "id" not in response.json():
+        response = requests.post(f"https://api.runwayml.com/v1/inference/{model_choice}", headers=headers, json=data)
+        if response.status_code != 200 or "urls" not in response.json():
             logging.error(f"Ошибка запроса Runway: {response.text}")
             await bot.send_message(user_id, "❌ Runway не принял запрос. Попробуй позже.")
             return
 
-        generation_id = response.json()["id"]
+        status_url = response.json()["urls"]["get"]
         video_url = None
         wait_message = await bot.send_message(user_id, "⏳ Генерируем видео")
         progress = ["⏳ Генерируем видео.", "⏳ Генерируем видео..", "⏳ Генерируем видео..."]
 
         for i in range(30):
-            check = requests.get(f"https://api.runwayml.com/v2/generations/{generation_id}", headers=headers)
+            check = requests.get(status_url, headers=headers)
             status = check.json()
             if status.get("status") == "succeeded":
                 video_url = status.get("output", {}).get("video")
