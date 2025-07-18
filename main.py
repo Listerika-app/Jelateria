@@ -113,7 +113,7 @@ async def generate_video(callback_query: types.CallbackQuery):
 
         data = {
             "input": {
-                "image": image_url,
+                "image_url": image_url,
                 "prompt": prompt,
                 "num_frames": 80,
                 "seed": 42
@@ -121,7 +121,7 @@ async def generate_video(callback_query: types.CallbackQuery):
         }
 
         response = requests.post(
-            "https://api.runwayml.com/v1/generate/video/image-to-video",
+            "https://api.runwayml.com/v2/generations",
             headers=headers,
             json=data
         )
@@ -139,12 +139,12 @@ async def generate_video(callback_query: types.CallbackQuery):
 
         for i in range(30):
             check = requests.get(
-                f"https://api.runwayml.com/v1/generate/video/{generation_id}",
+                f"https://api.runwayml.com/v2/generations/{generation_id}",
                 headers=headers
             )
             status = check.json()
             if status.get("status") == "succeeded":
-                video_url = status["video_url"]
+                video_url = status.get("output", {}).get("video")
                 break
             dots = progress[i % 3]
             await bot.edit_message_text(chat_id=user_id, message_id=wait_message.message_id, text=dots)
