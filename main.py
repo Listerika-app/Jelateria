@@ -1,22 +1,25 @@
 import os
 import logging
 import base64
+import requests
+import time
 from aiogram import Bot, Dispatcher, types, executor
 from openai import OpenAI
 
 # Настройки
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
 
+client = OpenAI(api_key=OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# Для хранения описаний на пользователя
+# Храним описания пользователей
 user_descriptions = {}
 
-# GPT: описывает игрушку по изображению
+# Генерируем описание игрушки
 async def describe_toy(photo_bytes):
     b64 = base64.b64encode(photo_bytes).decode("utf-8")
     image_data = f"data:image/jpeg;base64,{b64}"
@@ -48,11 +51,10 @@ async def handle_photo(message: types.Message):
     photo_bytes = photo.read()
 
     description = await describe_toy(photo_bytes)
-    user_descriptions[user_id] = description  # Сохраняем описание
+    user_descriptions[user_id] = description
 
     await message.reply(description)
 
-    # Определение типа и кнопок
     if "мягкая" in description.lower():
         text, buttons = "Начинаем оживлять мягкую игрушку!", ["Танец", "Поцелуйчики"]
     elif "кукла" in description.lower():
@@ -67,7 +69,7 @@ async def handle_photo(message: types.Message):
     kb.add(*[types.InlineKeyboardButton(text=b, callback_data=b) for b in buttons])
     await message.reply(text, reply_markup=kb)
 
-# Обработка кнопок
+# Обработка кнопок и видео Runway
 @dp.callback_query_handler()
 async def process_callback(callback_query: types.CallbackQuery):
     action = callback_query.data
@@ -75,41 +77,66 @@ async def process_callback(callback_query: types.CallbackQuery):
 
     await bot.send_message(user_id, f"🎬 Оживляем: {action}...")
 
-    # Получаем описание игрушки
     description = user_descriptions.get(user_id, "мягкая игрушка")
+    character = description.replace("Это", "").replace("мягкая игрушка", "").strip(".").strip() or "мягкая игрушка"
+    style = "в 3D стиле, как в мультфильмах Disney, яркий фон"
 
-    # Определяем персонажа (например, "котик")
-    # Выделим первое подходящее существительное из описания
-    character = description.replace("Это", "").replace("мягкая игрушка", "").strip().strip(".") or "мягкая игрушка"
-
-    # Формируем промпт
     if action == "Танец":
-        prompt = f"{character} танцует в мультяшном стиле, яркий фон, детская атмосфера"
+        prompt = f"{character} танцует, {style}"
     elif action == "Поцелуйчики":
-        prompt = f"{character} посылает воздушный поцелуй, улыбается, мультяшный стиль, яркий фон"
+        prompt = f"{character} посылает воздушный поцелуй, улыбается, {style}"
     elif action == "Привет":
-        prompt = f"{character} улыбается и машет рукой, дружелюбный стиль"
+        prompt = f"{character} машет рукой и улыбается, {style}"
     elif action == "Едем":
-        prompt = f"{character} едет по игрушечному городу, радостная атмосфера, мультяшный стиль"
+        prompt = f"{character} едет по игрушечному городу, {style}"
     elif action == "Дрифт":
-        prompt = f"{character} дрифтит с дымом из-под колёс, стильное движение, как в мультике"
+        prompt = f"{character} дрифтит с дымом из-под колёс, {style}"
     else:
         await bot.send_message(user_id, "Пока не умею оживлять это действие 🙈")
         return
 
     try:
-        image = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            n=1,
-            size="1024x1024",
-            quality="standard"
+        headers = {
+            "Authorization": f"Bearer {RUNWAY_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "input": {
+                "prompt": prompt,
+                "num_frames": 80,
+                "seed": 42
+            }
+        }
+
+        response = requests.post(
+            "https://api.runwayml.com/v1/generate/video/text-to-video",
+            headers=headers,
+            json=data
         )
-        image_url = image.data[0].url
-        await bot.send_photo(user_id, image_url)
+
+        generation_id = response.json()["id"]
+        video_url = None
+
+        for _ in range(30):
+            check = requests.get(
+                f"https://api.runwayml.com/v1/generate/video/{generation_id}",
+                headers=headers
+            )
+            status = check.json()
+            if status.get("status") == "succeeded":
+                video_url = status["video_url"]
+                break
+            time.sleep(5)
+
+        if video_url:
+            await bot.send_video(user_id, video_url)
+        else:
+            await bot.send_message(user_id, "⏳ Видео не удалось получить вовремя. Попробуй ещё раз.")
+
     except Exception as e:
-        logging.error(f"Ошибка генерации изображения: {e}")
-        await bot.send_message(user_id, "Не удалось оживить игрушку 😢")
+        logging.error(f"Ошибка Runway: {e}")
+        await bot.send_message(user_id, "❌ Не удалось сгенерировать видео.")
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
