@@ -13,8 +13,11 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# Определение типа игрушки по фото
-async def classify_toy(photo_bytes):
+# Для хранения описаний на пользователя
+user_descriptions = {}
+
+# GPT: описывает игрушку по изображению
+async def describe_toy(photo_bytes):
     b64 = base64.b64encode(photo_bytes).decode("utf-8")
     image_data = f"data:image/jpeg;base64,{b64}"
 
@@ -24,42 +27,47 @@ async def classify_toy(photo_bytes):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Определи, что изображено на фото. Ответь одним словом: кукла, машинка или мягкая игрушка."},
+                    {"type": "text", "text": "Опиши, что изображено на фото. Если это игрушка, укажи какая именно: кукла, машинка или мягкая игрушка. Опиши персонажа. Используй одно-два предложения."},
                     {"type": "image_url", "image_url": {"url": image_data}},
                 ]
             }
         ],
-        max_tokens=10
+        max_tokens=50
     )
 
-    result = response.choices[0].message.content.strip().lower()
-    logging.info(f"[GPT определил]: {result}")
-    return result
+    description = response.choices[0].message.content.strip()
+    logging.info(f"[Описание игрушки]: {description}")
+    return description
 
-# Обработка входящего фото
+# Обработка фото
 @dp.message_handler(content_types=types.ContentType.PHOTO)
 async def handle_photo(message: types.Message):
+    user_id = message.from_user.id
     file = await bot.get_file(message.photo[-1].file_id)
     photo = await bot.download_file(file.file_path)
     photo_bytes = photo.read()
 
-    toy_type = await classify_toy(photo_bytes)
+    description = await describe_toy(photo_bytes)
+    user_descriptions[user_id] = description  # Сохраняем описание
 
-    if "мягкая" in toy_type:
+    await message.reply(description)
+
+    # Определение типа и кнопок
+    if "мягкая" in description.lower():
         text, buttons = "Начинаем оживлять мягкую игрушку!", ["Танец", "Поцелуйчики"]
-    elif "кукла" in toy_type:
+    elif "кукла" in description.lower():
         text, buttons = "Начинаем волшебство, оживляем куклу!", ["Привет", "Поцелуйчики"]
-    elif "машинка" in toy_type:
+    elif "машин" in description.lower():
         text, buttons = "Ну что, заводим мотор и поехали?", ["Едем", "Дрифт"]
     else:
-        await message.reply("Не удалось определить игрушку 😢")
+        await message.reply("Не удалось точно определить тип игрушки 😢")
         return
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(*[types.InlineKeyboardButton(text=b, callback_data=b) for b in buttons])
     await message.reply(text, reply_markup=kb)
 
-# Оживление по кнопке
+# Обработка кнопок
 @dp.callback_query_handler()
 async def process_callback(callback_query: types.CallbackQuery):
     action = callback_query.data
@@ -67,17 +75,24 @@ async def process_callback(callback_query: types.CallbackQuery):
 
     await bot.send_message(user_id, f"🎬 Оживляем: {action}...")
 
-    # Универсальные промпты для мягкой игрушки
+    # Получаем описание игрушки
+    description = user_descriptions.get(user_id, "мягкая игрушка")
+
+    # Определяем персонажа (например, "котик")
+    # Выделим первое подходящее существительное из описания
+    character = description.replace("Это", "").replace("мягкая игрушка", "").strip().strip(".") or "мягкая игрушка"
+
+    # Формируем промпт
     if action == "Танец":
-        prompt = "Мягкая игрушка танцует с радостью, мультяшный стиль, яркий фон, детская атмосфера"
+        prompt = f"{character} танцует в мультяшном стиле, яркий фон, детская атмосфера"
     elif action == "Поцелуйчики":
-        prompt = "Мягкая игрушка посылает воздушный поцелуй, улыбается, милый мультяшный стиль, яркий фон"
+        prompt = f"{character} посылает воздушный поцелуй, улыбается, мультяшный стиль, яркий фон"
     elif action == "Привет":
-        prompt = "Кукла улыбается и машет рукой, мультяшный стиль"
+        prompt = f"{character} улыбается и машет рукой, дружелюбный стиль"
     elif action == "Едем":
-        prompt = "Игрушечная машинка едет по игрушечному городу, мультяшный стиль"
+        prompt = f"{character} едет по игрушечному городу, радостная атмосфера, мультяшный стиль"
     elif action == "Дрифт":
-        prompt = "Игрушечная машинка дрифтит с дымом из-под колёс, весёлый стиль"
+        prompt = f"{character} дрифтит с дымом из-под колёс, стильное движение, как в мультике"
     else:
         await bot.send_message(user_id, "Пока не умею оживлять это действие 🙈")
         return
