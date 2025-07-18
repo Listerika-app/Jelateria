@@ -117,6 +117,7 @@ async def generate_video(callback_query: types.CallbackQuery):
             "input": {
                 "image_url": image_url,
                 "prompt": prompt,
+                "motion": "default",
                 "num_frames": 80,
                 "seed": 42
             }
