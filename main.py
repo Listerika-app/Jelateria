@@ -1,23 +1,23 @@
 import os
-import logging
-import openai
 import base64
+import logging
 from aiogram import Bot, Dispatcher, types, executor
+from openai import OpenAI
 
 # Настройки
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
 async def classify_toy(photo_bytes):
-    b64 = base64.b64encode(photo_bytes).decode('utf-8')
+    b64 = base64.b64encode(photo_bytes).decode("utf-8")
     image_data = f"data:image/jpeg;base64,{b64}"
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {
@@ -31,8 +31,8 @@ async def classify_toy(photo_bytes):
         max_tokens=10
     )
 
-    result = response.choices[0].message["content"].strip().lower()
-    logging.info(f"Определено: {result}")
+    result = response.choices[0].message.content.strip().lower()
+    logging.info(f"GPT ответил: {result}")
     return result
 
 @dp.message_handler(content_types=types.ContentType.PHOTO)
@@ -44,14 +44,11 @@ async def handle_photo(message: types.Message):
     toy_type = await classify_toy(photo_bytes)
 
     if "мягкая" in toy_type:
-        text = "Начинаем оживлять мягкую игрушку!"
-        buttons = ["Танец", "Поцелуйчики"]
+        text, buttons = "Начинаем оживлять мягкую игрушку!", ["Танец", "Поцелуйчики"]
     elif "кукла" in toy_type:
-        text = "Начинаем волшебство, оживляем куклу!"
-        buttons = ["Привет", "Поцелуйчики"]
+        text, buttons = "Начинаем волшебство, оживляем куклу!", ["Привет", "Поцелуйчики"]
     elif "машинка" in toy_type:
-        text = "Ну что, заводим мотор и поехали?"
-        buttons = ["Едем", "Дрифт"]
+        text, buttons = "Ну что, заводим мотор и поехали?", ["Едем", "Дрифт"]
     else:
         await message.reply("Не удалось определить игрушку 😢")
         return
@@ -61,9 +58,9 @@ async def handle_photo(message: types.Message):
     await message.reply(text, reply_markup=kb)
 
 @dp.callback_query_handler()
-async def process_callback(callback_query: types.CallbackQuery):
-    action = callback_query.data
-    await bot.send_message(callback_query.from_user.id, f"🎬 Оживляем игрушку... [{action}]")
+async def process_cb(cq: types.CallbackQuery):
+    action = cq.data
+    await bot.send_message(cq.from_user.id, f"🎬 Оживляем игрушку... [{action}]")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
