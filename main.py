@@ -114,6 +114,7 @@ async def generate_video(callback_query: types.CallbackQuery):
         }
 
         data = {
+            "model": "gen-4-turbo",
             "input": {
                 "image_url": image_url,
                 "prompt": prompt,
