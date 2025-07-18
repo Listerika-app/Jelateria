@@ -126,6 +126,11 @@ async def generate_video(callback_query: types.CallbackQuery):
             json=data
         )
 
+        if response.status_code != 200 or "id" not in response.json():
+            logging.error(f"Ошибка запроса Runway: {response.text}")
+            await bot.send_message(user_id, "❌ Runway не принял запрос. Попробуй позже.")
+            return
+
         generation_id = response.json()["id"]
         video_url = None
 
